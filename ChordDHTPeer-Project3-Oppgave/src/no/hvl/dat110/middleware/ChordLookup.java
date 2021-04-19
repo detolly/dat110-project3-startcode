@@ -3,15 +3,15 @@
  */
 package no.hvl.dat110.middleware;
 
+import no.hvl.dat110.rpc.interfaces.NodeInterface;
+import no.hvl.dat110.util.Hash;
+import no.hvl.dat110.util.Util;
+
 import java.math.BigInteger;
 import java.rmi.RemoteException;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-
-import no.hvl.dat110.rpc.interfaces.NodeInterface;
-import no.hvl.dat110.util.Hash;
-import no.hvl.dat110.util.Util;
 
 /**
  * @author tdoy
@@ -26,7 +26,16 @@ public class ChordLookup {
 	}
 	
 	public NodeInterface findSuccessor(BigInteger key) throws RemoteException {
-		
+
+		NodeInterface successor = node.getSuccessor();
+		NodeInterface stub = Util.getProcessStub(successor.getNodeName(), successor.getPort());
+
+		if (Util.computeLogic(key, node.getNodeID().add(BigInteger.ONE), stub.getNodeID()))
+			return stub;
+
+		NodeInterface highest = findHighestPredecessor(key);
+		return highest.findSuccessor(key);
+
 		// ask this node to find the successor of key
 		
 		// get the successor of the node
@@ -40,29 +49,26 @@ public class ChordLookup {
 		// if logic returns false; call findHighestPredecessor(key)
 		
 		// do return highest_pred.findSuccessor(key) - This is a recursive call until logic returns true
-				
-		return null;					
 	}
 	
 	/**
 	 * This method makes a remote call. Invoked from a local client
-	 * @param ID BigInteger
+	 * @param key BigInteger
 	 * @return
 	 * @throws RemoteException
 	 */
 	private NodeInterface findHighestPredecessor(BigInteger key) throws RemoteException {
-		
-		// collect the entries in the finger table for this node
-		
-		// starting from the last entry, iterate over the finger table
-		
-		// for each finger, obtain a stub from the registry
-		
-		// check that finger is a member of the set {nodeID+1,...,ID-1} i.e. (nodeID+1 <= finger <= key-1) using the ComputeLogic
-		
-		// if logic returns true, then return the finger (means finger is the closest to key)
-		
-		return (NodeInterface) node;			
+
+		List<NodeInterface> finger_table = node.getFingerTable();
+
+		for(int i = finger_table.size()-1; i >= 0; i--)
+		{
+			NodeInterface stub = Util.getProcessStub(finger_table.get(i).getNodeName(), finger_table.get(i).getPort());
+			if (Util.computeLogic(stub.getNodeID(), node.getNodeID().add(BigInteger.ONE), key.subtract(BigInteger.ONE)))
+				return stub;
+		}
+
+		return node;
 	}
 	
 	public void copyKeysFromSuccessor(NodeInterface succ) {

@@ -6,6 +6,9 @@ package no.hvl.dat110.util;
  * dat110 - project 3
  */
 
+import no.hvl.dat110.middleware.Message;
+import no.hvl.dat110.rpc.interfaces.NodeInterface;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -17,10 +20,6 @@ import java.text.NumberFormat;
 import java.util.HashSet;
 import java.util.Random;
 import java.util.Set;
-
-import no.hvl.dat110.middleware.Message;
-import no.hvl.dat110.rpc.interfaces.NodeInterface;
-import no.hvl.dat110.util.Hash;
 
 public class FileManager {
 	
@@ -53,7 +52,14 @@ public class FileManager {
 	}
 	
 	public void createReplicaFiles() {
-	 	
+
+		for(int i = 0; i < numReplicas; i++)
+		{
+			String newfilename = String.format("%s%d", filename, i);
+			BigInteger hash = Hash.hashOf(newfilename);
+			replicafiles[i] = hash;
+		}
+
 		// implement
 		
 		// set a loop where size = numReplicas
@@ -73,6 +79,18 @@ public class FileManager {
      */
     public int distributeReplicastoPeers() throws RemoteException {
     	int counter = 0;
+
+    	createReplicaFiles();
+
+    	int primary = new Random().nextInt(Util.numReplicas-1);
+
+    	for(BigInteger repl : replicafiles)
+		{
+			NodeInterface stub = chordnode.findSuccessor(repl);
+			stub.addKey(repl);
+			stub.saveFileContent(filename, repl, bytesOfFile, counter == primary);
+			counter++;
+		}
     	
     	// Task1: Given a filename, make replicas and distribute them to all active peers such that: pred < replica <= peer
     	
@@ -104,8 +122,19 @@ public class FileManager {
 		
 		this.filename = filename;
 		Set<Message> succinfo = new HashSet<Message>();
+
 		// Task: Given a filename, find all the peers that hold a copy of this file
-		
+
+		createReplicaFiles();
+
+		for(BigInteger repl : replicafiles)
+		{
+			NodeInterface stub = chordnode.findSuccessor(repl);
+			Message meta = stub.getFilesMetadata(repl);
+			if (meta != null)
+				succinfo.add(meta);
+		}
+
 		// generate the N replicas from the filename by calling createReplicaFiles()
 		
 		// it means, iterate over the replicas of the file
@@ -128,7 +157,13 @@ public class FileManager {
 	public NodeInterface findPrimaryOfItem() {
 
 		// Task: Given all the active peers of a file (activeNodesforFile()), find which is holding the primary copy
-		
+
+		for(Message m : activeNodesforFile)
+		{
+			if (m.isPrimaryServer())
+				return Util.getProcessStub(m.getNodeIP(), m.getPort());
+		}
+
 		// iterate over the activeNodesforFile
 		
 		// for each active peer (saved as Message)

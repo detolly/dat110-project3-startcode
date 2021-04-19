@@ -3,15 +3,14 @@
  */
 package no.hvl.dat110.middleware;
 
-import java.math.BigInteger;
+import no.hvl.dat110.rpc.interfaces.NodeInterface;
+import no.hvl.dat110.util.LamportClock;
+import no.hvl.dat110.util.Util;
+
 import java.rmi.RemoteException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-
-import no.hvl.dat110.rpc.interfaces.NodeInterface;
-import no.hvl.dat110.util.LamportClock;
-import no.hvl.dat110.util.Util;
 
 /**
  * @author tdoy
@@ -48,7 +47,30 @@ public class MutualExclusion {
 	public boolean doMutexRequest(Message message, byte[] updates) throws RemoteException {
 		
 		System.out.println(node.nodename + " wants to access CS");
-		
+
+		queueack.clear();
+		mutexqueue.clear();
+
+		clock.increment();
+
+		message.setClock(clock.getClock());
+
+		WANTS_TO_ENTER_CS = true;
+
+		List<Message> nodes = removeDuplicatePeersBeforeVoting();
+		multicastMessage(message, nodes);
+
+		if (areAllMessagesReturned(nodes.size()))
+		{
+			acquireLock();
+			node.broadcastUpdatetoPeers(updates);
+			mutexqueue.clear();
+
+			return true;
+		}
+
+		return false;
+
 		// clear the queueack before requesting for votes
 		
 		// clear the mutexqueue
@@ -75,14 +97,18 @@ public class MutualExclusion {
 		// clear the mutexqueue
 		
 		// return permission
-		
-		
-		return false;
+
 	}
 	
 	// multicast message to other processes including self
 	private void multicastMessage(Message message, List<Message> activenodes) throws RemoteException {
-		
+
+		for(Message node : activenodes)
+		{
+			NodeInterface stub = Util.getProcessStub(node.getNodeIP(), node.getPort());
+			stub.onMutexRequestReceived(message);
+		}
+
 		// iterate over the activenodes
 		
 		// obtain a stub for each node from the registry
@@ -94,11 +120,26 @@ public class MutualExclusion {
 	public void onMutexRequestReceived(Message message) throws RemoteException {
 		
 		// increment the local clock
+		clock.increment();
+
+		if (message.getNodeID().equals(node.getNodeID()))
+		{
+			message.setAcknowledged(true);
+			node.onMutexAcknowledgementReceived(message);
+			return;
+		}
 		
 		// if message is from self, acknowledge, and call onMutexAcknowledgementReceived()
 			
 		int caseid = -1;
-		
+
+		if (!WANTS_TO_ENTER_CS)
+			caseid = 0;
+		else if (CS_BUSY)
+			caseid = 1;
+		else if (WANTS_TO_ENTER_CS)
+			caseid = 2;
+
 		// write if statement to transition to the correct caseid
 		// caseid=0: Receiver is not accessing shared resource and does not want to (send OK to sender)
 		// caseid=1: Receiver already has access to the resource (dont reply but queue the request)
@@ -120,14 +161,16 @@ public class MutualExclusion {
 				// get a stub for the sender from the registry
 				// acknowledge message
 				// send acknowledgement back by calling onMutexAcknowledgementReceived()
-				
+
+				NodeInterface stub = Util.getProcessStub(procName, port);
+				message.setAcknowledged(true);
+				stub.onMutexAcknowledgementReceived(message);
 				break;
 			}
 		
 			/** case 2: Receiver already has access to the resource (dont reply but queue the request) */
 			case 1: {
-				
-				// queue this message
+				queue.add(message);
 				break;
 			}
 			
@@ -142,8 +185,17 @@ public class MutualExclusion {
 				// if clocks are the same, compare nodeIDs, the lowest wins
 				// if sender wins, acknowledge the message, obtain a stub and call onMutexAcknowledgementReceived()
 				// if sender looses, queue it
-				
-				
+
+				boolean we_are_the_winner = clock.getClock() < message.getClock();
+
+				if (we_are_the_winner)
+					queue.add(message);
+				else
+				{
+					message.setAcknowledged(true);
+					NodeInterface stub = Util.getProcessStub(message.getNodeIP(), message.getPort());
+					stub.onMutexAcknowledgementReceived(message);
+				}
 
 				break;
 			}
@@ -156,17 +208,24 @@ public class MutualExclusion {
 	public void onMutexAcknowledgementReceived(Message message) throws RemoteException {
 		
 		// add message to queueack
+		queueack.add(message);
 		
 	}
 	
 	// multicast release locks message to other processes including self
-	public void multicastReleaseLocks(Set<Message> activenodes) {
+	public void multicastReleaseLocks(Set<Message> activenodes) throws RemoteException {
 		
 		// iterate over the activenodes
 		
 		// obtain a stub for each node from the registry
 		
 		// call releaseLocks()
+
+		for (Message m : activenodes) {
+			NodeInterface stub = Util.getProcessStub(m.getNodeIP(), m.getPort());
+			stub.releaseLocks();
+		}
+
 	
 	}
 	
@@ -177,7 +236,11 @@ public class MutualExclusion {
 		
 		// return true if yes and false if no
 
-		return false;
+		boolean size_is_numvoters = queueack.size() == numvoters;
+
+		queueack.clear();
+
+		return size_is_numvoters;
 	}
 	
 	private List<Message> removeDuplicatePeersBeforeVoting() {
